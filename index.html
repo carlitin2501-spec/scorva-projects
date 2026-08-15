@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Scorva Projects | Tampa Bay Home Renovation</title>
+<meta name="description" content="Scorva Projects helps Tampa Bay homeowners move kitchen, bathroom, flooring and painting projects forward with clarity and trusted local professionals.">
+<style>
+:root{--bg:#0b0e11;--panel:#151a1f;--paper:#f3efe7;--copper:#b56b3c;--ink:#11161b}
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:var(--paper);color:var(--ink);line-height:1.55}
+.wrap{max-width:1120px;margin:auto;padding:0 24px}header{background:var(--bg);color:white;position:sticky;top:0;z-index:20}
+nav{height:74px;display:flex;align-items:center;justify-content:space-between}.logo{font-weight:800;letter-spacing:.14em}
+a{text-decoration:none;color:inherit}.btn{display:inline-block;background:var(--copper);color:white;padding:13px 18px;border-radius:7px;font-weight:700}
+.hero{background:linear-gradient(135deg,#0b0e11,#171d23);color:white;padding:96px 0}.hero-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:56px;align-items:center}
+.kicker{color:var(--copper);font-weight:800;font-size:12px;letter-spacing:.17em;text-transform:uppercase}
+h1{font-size:clamp(50px,7vw,78px);line-height:.98;letter-spacing:-.05em;margin:16px 0 22px}h2{font-size:42px;letter-spacing:-.04em}
+.hero p{font-size:20px;color:#c5ccd2}.panel{background:var(--panel);border:1px solid #333b43;border-radius:16px;padding:28px}.item{padding:16px 0;border-bottom:1px solid #30363c}.item:last-child{border:0}
+section{padding:80px 0}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}.card{background:white;padding:24px;border:1px solid #ddd7cd;border-radius:13px}.card p{color:#68717a}
+.dark{background:var(--bg);color:white}.dark .card{background:#151a1f;border-color:#2c333a}.dark .card p{color:#aeb6bd}
+.quote{display:grid;grid-template-columns:.9fr 1.1fr;gap:46px}.form{background:white;padding:28px;border-radius:14px;color:#111}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:14px}label{font-size:13px;font-weight:700}input,select,textarea{width:100%;padding:12px;margin:6px 0 14px;border:1px solid #d3d6d9;border-radius:7px}textarea{min-height:110px}
+button{border:0}.small{font-size:12px;color:#7b848d}footer{background:#080a0c;color:#8e979f;padding:28px 0;font-size:13px}
+@media(max-width:800px){.hero-grid,.quote{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}}@media(max-width:500px){.grid,.row{grid-template-columns:1fr}}
+</style></head><body>
+<header><div class="wrap"><nav><div class="logo">SCORVA PROJECTS</div><a class="btn" href="#quote">Start a Project</a></nav></div></header>
+<section class="hero"><div class="wrap hero-grid"><div><div class="kicker">Tampa Bay Home Renovation</div><h1>Built with precision.</h1><p>Scorva Projects helps homeowners move kitchen, bathroom, flooring and painting projects forward with a clear process and trusted local professionals.</p><p><a class="btn" href="#quote">Request a Consultation</a></p></div>
+<div class="panel"><div class="kicker">SCORVA SERVICES</div><div class="item"><b>Kitchen Renovation</b><br><span class="small">Cabinets · Countertops · Finishes</span></div><div class="item"><b>Bathroom Renovation</b><br><span class="small">Showers · Tile · Vanities</span></div><div class="item"><b>Flooring</b><br><span class="small">Room · Multi-room · Whole home</span></div><div class="item"><b>Painting</b><br><span class="small">Interior · Exterior · Both</span></div></div></div></section>
+<section><div class="wrap"><div class="kicker">What We Do</div><h2>Focused home improvement projects.</h2><div class="grid">
+<div class="card"><h3>Kitchens</h3><p>Kitchen updates and full renovation projects.</p></div>
+<div class="card"><h3>Bathrooms</h3><p>Refreshes through complete bathroom transformations.</p></div>
+<div class="card"><h3>Flooring</h3><p>New flooring for single rooms or whole homes.</p></div>
+<div class="card"><h3>Painting</h3><p>Interior and exterior painting for cleaner, updated spaces.</p></div>
+</div></div></section>
+<section class="dark"><div class="wrap"><div class="kicker">The Scorva Process</div><h2>Simple from the first conversation.</h2><div class="grid">
+<div class="card"><h3>01. Tell us about it</h3><p>Share what you want to change, your ZIP code and timing.</p></div>
+<div class="card"><h3>02. Project review</h3><p>We review scope and fit before moving the project forward.</p></div>
+<div class="card"><h3>03. Estimate & execution</h3><p>The right local professional is coordinated for the next step.</p></div>
+<div class="card"><h3>04. Track the opportunity</h3><p>Every qualified project is organized for follow-up and conversion.</p></div>
+</div></div></section>
+<section id="quote" class="dark"><div class="wrap quote"><div><div class="kicker">Start a Project</div><h2>Tell us what you want to change.</h2><p>You do not need drawings or every detail figured out. Give us the basics and we’ll determine the right next step.</p></div>
+<form class="form" action="mailto:carlitin2501@gmail.com" method="post" enctype="text/plain">
+<div class="row"><div><label>Name</label><input name="Name" required></div><div><label>Phone</label><input name="Phone" required></div></div>
+<div class="row"><div><label>Email</label><input type="email" name="Email" required></div><div><label>Project ZIP</label><input name="ZIP" required></div></div>
+<label>Project type</label><select id="projectType" name="Project Type" onchange="togglePainting()"><option>Kitchen Renovation</option><option>Bathroom Renovation</option><option>Flooring</option><option>Painting</option><option>Multiple / Whole-home</option></select>
+<div id="paintingOptions" style="display:none"><label>Painting type</label><select name="Painting Type"><option>Interior</option><option>Exterior</option><option>Both Interior & Exterior</option></select></div>
+<div class="row"><div><label>Budget</label><select name="Budget"><option>Not sure yet</option><option>Under $5,000</option><option>$5,000–$15,000</option><option>$15,000–$30,000</option><option>$30,000+</option></select></div>
+<div><label>Preferred start</label><select name="Start"><option>ASAP</option><option>Within 30 days</option><option>1–3 months</option><option>3+ months</option></select></div></div>
+<label>Project details</label><textarea name="Project Details"></textarea><button class="btn" type="submit">Request My Consultation</button>
+<p class="small">Temporary email capture until HubSpot submission is connected.</p></form></div></section>
+<footer><div class="wrap">© 2026 SCORVA PROJECTS · Tampa Bay, Florida · ScorvaProjects.com</div></footer>
+<script>function togglePainting(){var v=document.getElementById('projectType').value;document.getElementById('paintingOptions').style.display=v==='Painting'?'block':'none';}</script>
+</body></html>
