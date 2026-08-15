@@ -16,7 +16,8 @@ section{padding:80px 0}.grid{display:grid;grid-template-columns:repeat(4,1fr);ga
 .dark{background:var(--bg);color:white}.dark .card{background:#151a1f;border-color:#2c333a}.dark .card p{color:#aeb6bd}
 .quote{display:grid;grid-template-columns:.9fr 1.1fr;gap:46px}.form{background:white;padding:28px;border-radius:14px;color:#111}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:14px}label{font-size:13px;font-weight:700}input,select,textarea{width:100%;padding:12px;margin:6px 0 14px;border:1px solid #d3d6d9;border-radius:7px}textarea{min-height:110px}
-button{border:0}.small{font-size:12px;color:#7b848d}footer{background:#080a0c;color:#8e979f;padding:28px 0;font-size:13px}
+button{border:0}.small{font-size:12px;color:#7b848d}.status{margin-top:14px;font-size:13px;font-weight:700}.status.ok{color:#2f7d32}.status.err{color:#a33}
+footer{background:#080a0c;color:#8e979f;padding:28px 0;font-size:13px}
 @media(max-width:800px){.hero-grid,.quote{grid-template-columns:1fr}.grid{grid-template-columns:1fr 1fr}}@media(max-width:500px){.grid,.row{grid-template-columns:1fr}}
 </style></head><body>
 <header><div class="wrap"><nav><div class="logo">SCORVA PROJECTS</div><a class="btn" href="#quote">Start a Project</a></nav></div></header>
@@ -35,15 +36,34 @@ button{border:0}.small{font-size:12px;color:#7b848d}footer{background:#080a0c;co
 <div class="card"><h3>04. Track the opportunity</h3><p>Every qualified project is organized for follow-up and conversion.</p></div>
 </div></div></section>
 <section id="quote" class="dark"><div class="wrap quote"><div><div class="kicker">Start a Project</div><h2>Tell us what you want to change.</h2><p>You do not need drawings or every detail figured out. Give us the basics and we’ll determine the right next step.</p></div>
-<form class="form" action="mailto:carlitin2501@gmail.com" method="post" enctype="text/plain">
-<div class="row"><div><label>Name</label><input name="Name" required></div><div><label>Phone</label><input name="Phone" required></div></div>
-<div class="row"><div><label>Email</label><input type="email" name="Email" required></div><div><label>Project ZIP</label><input name="ZIP" required></div></div>
-<label>Project type</label><select id="projectType" name="Project Type" onchange="togglePainting()"><option>Kitchen Renovation</option><option>Bathroom Renovation</option><option>Flooring</option><option>Painting</option><option>Multiple / Whole-home</option></select>
-<div id="paintingOptions" style="display:none"><label>Painting type</label><select name="Painting Type"><option>Interior</option><option>Exterior</option><option>Both Interior & Exterior</option></select></div>
-<div class="row"><div><label>Budget</label><select name="Budget"><option>Not sure yet</option><option>Under $5,000</option><option>$5,000–$15,000</option><option>$15,000–$30,000</option><option>$30,000+</option></select></div>
-<div><label>Preferred start</label><select name="Start"><option>ASAP</option><option>Within 30 days</option><option>1–3 months</option><option>3+ months</option></select></div></div>
-<label>Project details</label><textarea name="Project Details"></textarea><button class="btn" type="submit">Request My Consultation</button>
-<p class="small">Project request form. CRM integration is being finalized.</p></form></div></section>
+<form id="leadForm" class="form">
+<div class="row"><div><label>First name</label><input name="firstName" required></div><div><label>Last name</label><input name="lastName" required></div></div>
+<div class="row"><div><label>Phone</label><input name="phone" required></div><div><label>Email</label><input type="email" name="email" required></div></div>
+<label>Project ZIP</label><input name="zip" inputmode="numeric" required>
+<label>Project type</label><select id="projectType" name="projectType" onchange="togglePainting()"><option>Kitchen Renovation</option><option>Bathroom Renovation</option><option>Flooring</option><option>Painting</option><option>Multiple / Whole-home</option></select>
+<div id="paintingOptions" style="display:none"><label>Painting type</label><select name="paintingType"><option>Interior</option><option>Exterior</option><option>Both Interior & Exterior</option></select></div>
+<div class="row"><div><label>Budget</label><select name="budget"><option>Not sure yet</option><option>Under $5,000</option><option>$5,000–$15,000</option><option>$15,000–$30,000</option><option>$30,000+</option></select></div>
+<div><label>Preferred start</label><select name="start"><option>ASAP</option><option>Within 30 days</option><option>1–3 months</option><option>3+ months</option></select></div></div>
+<label>Project details</label><textarea name="details"></textarea><button id="submitBtn" class="btn" type="submit">Request My Consultation</button>
+<div id="formStatus" class="status" aria-live="polite"></div></form></div></section>
 <footer><div class="wrap">© 2026 SCORVA PROJECTS · Tampa Bay, Florida · ScorvaProjects.com</div></footer>
-<script>function togglePainting(){var v=document.getElementById('projectType').value;document.getElementById('paintingOptions').style.display=v==='Painting'?'block':'none';}</script>
+<script>
+function togglePainting(){var v=document.getElementById('projectType').value;document.getElementById('paintingOptions').style.display=v==='Painting'?'block':'none';}
+const form=document.getElementById('leadForm');
+form.addEventListener('submit',async(e)=>{
+ e.preventDefault();
+ const btn=document.getElementById('submitBtn'), status=document.getElementById('formStatus');
+ btn.disabled=true; btn.textContent='Submitting...'; status.textContent=''; status.className='status';
+ const data=Object.fromEntries(new FormData(form).entries());
+ try{
+   const r=await fetch('/api/lead',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+   const out=await r.json();
+   if(!r.ok||!out.ok) throw new Error(out.error||'Unable to submit');
+   form.reset(); togglePainting();
+   status.textContent='Thank you. Your project request was received. We’ll contact you soon.'; status.className='status ok';
+ }catch(err){
+   status.textContent=err.message||'We could not submit your request. Please try again.'; status.className='status err';
+ }finally{btn.disabled=false; btn.textContent='Request My Consultation';}
+});
+</script>
 </body></html>
