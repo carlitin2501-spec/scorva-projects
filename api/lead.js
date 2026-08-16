@@ -1,5 +1,55 @@
 import { createHash } from 'node:crypto';
 
+// Best-effort warm-instance throttling. Vercel instances do not share memory, so this
+// supplements (rather than replaces) platform-level rate limiting if added later.
+const requestBuckets = globalThis.__scorvaLeadBuckets || new Map();
+globalThis.__scorvaLeadBuckets = requestBuckets;
+
+const RATE_WINDOW_MS = 15 * 60 * 1000;
+const RATE_MAX_REQUESTS = 8;
+const MAX_BODY_BYTES = 20_000;
+
+function clientIp(req) {
+  const forwarded = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
+  return forwarded || String(req.headers?.['x-real-ip'] || 'unknown');
+}
+
+function isRateLimited(req) {
+  const now = Date.now();
+  const key = createHash('sha256').update(clientIp(req)).digest('hex');
+  const current = requestBuckets.get(key);
+
+  if (!current || now - current.startedAt >= RATE_WINDOW_MS) {
+    requestBuckets.set(key, { startedAt: now, count: 1 });
+    return false;
+  }
+
+  current.count += 1;
+  requestBuckets.set(key, current);
+
+  // Opportunistic cleanup to keep warm-instance memory bounded.
+  if (requestBuckets.size > 500) {
+    for (const [bucketKey, bucket] of requestBuckets) {
+      if (now - bucket.startedAt >= RATE_WINDOW_MS) requestBuckets.delete(bucketKey);
+    }
+  }
+
+  return current.count > RATE_MAX_REQUESTS;
+}
+
+function isSameOrigin(req) {
+  const origin = String(req.headers?.origin || '').trim();
+  if (!origin) return true; // Some privacy tools omit Origin on same-site requests.
+
+  try {
+    const originHost = new URL(origin).host.toLowerCase();
+    const requestHost = String(req.headers?.['x-forwarded-host'] || req.headers?.host || '').split(',')[0].trim().toLowerCase();
+    return Boolean(requestHost) && originHost === requestHost;
+  } catch {
+    return false;
+  }
+}
+
 // Scorva website lead endpoint. Runs server-side on Vercel.
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -7,6 +57,26 @@ export default async function handler(req, res) {
     return res.status(405).json({ ok: false, error: 'Method not allowed' });
   }
   res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  const contentType = String(req.headers?.['content-type'] || '').toLowerCase();
+  if (!contentType.startsWith('application/json')) {
+    return res.status(415).json({ ok: false, error: 'Unsupported request format.' });
+  }
+
+  const contentLength = Number(req.headers?.['content-length'] || 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
+    return res.status(413).json({ ok: false, error: 'Request is too large.' });
+  }
+
+  if (!isSameOrigin(req)) {
+    return res.status(403).json({ ok: false, error: 'Request origin is not allowed.' });
+  }
+
+  if (isRateLimited(req)) {
+    res.setHeader('Retry-After', String(Math.ceil(RATE_WINDOW_MS / 1000)));
+    return res.status(429).json({ ok: false, error: 'Too many requests. Please try again later.' });
+  }
 
   const hubspotToken = process.env.HUBSPOT_ACCESS_TOKEN;
   const resendApiKey = process.env.RESEND_API_KEY;
@@ -15,7 +85,11 @@ export default async function handler(req, res) {
   if (!hubspotToken) return res.status(500).json({ ok: false, error: 'Lead service is temporarily unavailable.' });
 
   const body = req.body || {};
-  const clean = (v, max = 500) => String(v ?? '').trim().slice(0, max);
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return res.status(400).json({ ok: false, error: 'Invalid request body.' });
+  }
+
+  const clean = (v, max = 500) => String(v ?? '').replace(/[\u0000-\u001F\u007F]/g, ' ').trim().slice(0, max);
   const normalize = (v = '') => clean(v, 2000).toLowerCase().replace(/\s+/g, ' ');
   const firstName = clean(body.firstName, 60);
   const lastName = clean(body.lastName, 60);
@@ -78,7 +152,8 @@ export default async function handler(req, res) {
   async function hs(path, options = {}) {
     const r = await fetch(`https://api.hubapi.com${path}`, {
       ...options,
-      headers: { ...hubspotHeaders, ...(options.headers || {}) }
+      headers: { ...hubspotHeaders, ...(options.headers || {}) },
+      signal: AbortSignal.timeout(12_000)
     });
     const text = await r.text();
     let data = {};
@@ -127,7 +202,8 @@ export default async function handler(req, res) {
         subject: `New Scorva Lead: ${firstName} ${lastName} - ${projectLabel}`,
         html,
         reply_to: email
-      })
+      }),
+      signal: AbortSignal.timeout(10_000)
     });
     const text = await r.text();
     let data = {};
