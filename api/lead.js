@@ -8,6 +8,7 @@ globalThis.__scorvaLeadBuckets = requestBuckets;
 const RATE_WINDOW_MS = 15 * 60 * 1000;
 const RATE_MAX_REQUESTS = 8;
 const MAX_BODY_BYTES = 20_000;
+const DEDUPE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const DEAL_FINGERPRINT_PROPERTY = 'scorva_submission_fingerprint';
 
 function clientIp(req) {
@@ -303,6 +304,17 @@ export default async function handler(req, res) {
     }
   }
 
+  async function releaseExpiredFingerprint(deal) {
+    const createdAt = Date.parse(deal?.properties?.createdate || '');
+    if (!createdAt || Date.now() - createdAt < DEDUPE_WINDOW_MS) return false;
+
+    await hs(`/crm/v3/objects/deals/${deal.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ properties: { [DEAL_FINGERPRINT_PROPERTY]: '' } })
+    });
+    return true;
+  }
+
   async function getContactByEmail() {
     try {
       return await hs(`/crm/v3/objects/contacts/${encodeURIComponent(email)}?idProperty=email&properties=email`);
@@ -354,12 +366,15 @@ export default async function handler(req, res) {
     // and does not depend on contact/deal association propagation or CRM search indexing.
     const existingDeal = await getDealByFingerprint();
     if (existingDeal) {
-      return res.status(200).json({
-        ok: true,
-        dealId: existingDeal.id,
-        duplicate: true,
-        notificationSent: false
-      });
+      const released = await releaseExpiredFingerprint(existingDeal);
+      if (!released) {
+        return res.status(200).json({
+          ok: true,
+          dealId: existingDeal.id,
+          duplicate: true,
+          notificationSent: false
+        });
+      }
     }
 
     const contactId = await upsertContact();
