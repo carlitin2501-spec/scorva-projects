@@ -43,6 +43,25 @@ projectType.addEventListener('change',togglePainting);
 togglePainting();
 
 const form=document.getElementById('leadForm');
+
+function trackEvent(event,details={}){
+  const payload={event,...details};
+  window.dataLayer=window.dataLayer||[];
+  window.dataLayer.push(payload);
+  window.dispatchEvent(new CustomEvent('scorva:analytics',{detail:payload}));
+}
+
+let formStarted=false;
+form.addEventListener('input',()=>{
+  if(formStarted)return;
+  formStarted=true;
+  trackEvent('lead_form_start',{form:'project_request'});
+},{once:true});
+
+document.querySelectorAll('a[href="#quote"]').forEach(link=>{
+  link.addEventListener('click',()=>trackEvent('lead_cta_click',{label:(link.textContent||'').trim(),location:link.closest('header')?'header':link.closest('.mobile-cta')?'mobile_sticky':'page'}));
+});
+
 const normalize=v=>String(v??'').trim().toLowerCase().replace(/\s+/g,' ');
 const fingerprint=data=>[data.email,data.zip,data.projectType,data.paintingType,data.budget,data.start,data.details].map(normalize).join('|');
 
@@ -70,6 +89,7 @@ form.addEventListener('submit',async e=>{
   try{
     const saved=JSON.parse(localStorage.getItem('scorvaLastLead')||'null');
     if(saved&&saved.fingerprint===fp&&Date.now()-saved.timestamp<24*60*60*1000){
+      trackEvent('lead_duplicate_blocked',{source:'browser',project_type:data.projectType||'',zip:data.zip||''});
       status.textContent='We already received this project request. If this is a different project, change the project details and submit again.';
       status.className='status ok';
       status.scrollIntoView({behavior:'smooth',block:'nearest'});
@@ -88,10 +108,23 @@ form.addEventListener('submit',async e=>{
     try{localStorage.setItem('scorvaLastLead',JSON.stringify({fingerprint:fp,timestamp:Date.now()}))}catch{}
     form.reset();
     togglePainting();
+    trackEvent(out.duplicate?'lead_duplicate_blocked':'lead_submit_success',{
+      source:out.duplicate?'server':'api',
+      project_type:data.projectType||'',
+      painting_type:data.paintingType||'',
+      budget:data.budget||'',
+      start:data.start||'',
+      homeowner:data.homeowner||'',
+      zip:data.zip||'',
+      utm_source:data.utmSource||'',
+      utm_medium:data.utmMedium||'',
+      utm_campaign:data.utmCampaign||''
+    });
     status.textContent=out.duplicate?'We already received this project request. No duplicate was created.':'Thank you. Your project request was received. We’ll contact you soon.';
     status.className='status ok';
     status.scrollIntoView({behavior:'smooth',block:'nearest'});
   }catch(err){
+    trackEvent('lead_submit_error',{project_type:data.projectType||'',zip:data.zip||''});
     status.textContent=err.message||'We could not submit your request. Please try again.';
     status.className='status err';
     status.scrollIntoView({behavior:'smooth',block:'nearest'});
