@@ -10,6 +10,13 @@ export default async function handler(req, res) {
   const notificationEmail = process.env.LEAD_NOTIFICATION_EMAIL;
   const fromEmail = process.env.LEAD_FROM_EMAIL || 'Scorva Projects <leads@scorvaprojects.com>';
 
+  console.log('Scorva env status', {
+    hubspot: Boolean(hubspotToken),
+    resend: Boolean(resendApiKey),
+    notificationEmail: Boolean(notificationEmail),
+    fromEmail: Boolean(fromEmail)
+  });
+
   if (!hubspotToken) return res.status(500).json({ ok: false, error: 'HubSpot integration is not configured yet.' });
 
   const { firstName='', lastName='', email='', phone='', zip='', projectType='', paintingType='', budget='', start='', details='' } = req.body || {};
@@ -25,7 +32,10 @@ export default async function handler(req, res) {
   }
 
   async function sendLeadEmail({ projectLabel, dealId }) {
-    if (!resendApiKey || !notificationEmail) return { skipped: true };
+    if (!resendApiKey || !notificationEmail) {
+      console.warn('Scorva notification skipped', { resendApiKey: Boolean(resendApiKey), notificationEmail: Boolean(notificationEmail) });
+      return { skipped: true };
+    }
 
     const safe = (v='') => String(v)
       .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
@@ -48,6 +58,7 @@ export default async function handler(req, res) {
         <p style="margin-top:24px"><a href="https://app.hubspot.com/contacts/247060573/record/0-3/${encodeURIComponent(dealId)}" style="background:#111;color:white;padding:12px 16px;border-radius:6px;text-decoration:none">Open Deal in HubSpot</a></p>
       </div>`;
 
+    console.log('Scorva attempting Resend email', { to: notificationEmail, from: fromEmail });
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${resendApiKey}`, 'Content-Type': 'application/json' },
@@ -62,6 +73,7 @@ export default async function handler(req, res) {
 
     const text = await r.text(); let data={};
     try { data=text?JSON.parse(text):{}; } catch { data={raw:text}; }
+    console.log('Scorva Resend response', { status: r.status, ok: r.ok, data });
     if (!r.ok) { const e=new Error(data?.message||`Resend failed (${r.status})`); e.data=data; throw e; }
     return data;
   }
@@ -88,7 +100,6 @@ export default async function handler(req, res) {
       notificationSent = !emailResult?.skipped;
     } catch (notifyError) {
       console.error('Scorva notification error', notifyError?.data || notifyError);
-      // Lead creation succeeds even if notification email fails.
     }
 
     return res.status(200).json({ok:true,dealId:deal.id,notificationSent});
