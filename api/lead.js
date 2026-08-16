@@ -29,6 +29,13 @@ export default async function handler(req, res) {
   const details = clean(body.details, 2000);
   const homeowner = clean(body.homeowner, 40);
   const website = clean(body.website, 100);
+  const sourcePage = clean(body.sourcePage, 300);
+  const referrer = clean(body.referrer || req.headers?.referer, 300);
+  const utmSource = clean(body.utmSource, 120);
+  const utmMedium = clean(body.utmMedium, 120);
+  const utmCampaign = clean(body.utmCampaign, 160);
+  const utmContent = clean(body.utmContent, 160);
+  const utmTerm = clean(body.utmTerm, 160);
 
   if (website) return res.status(200).json({ ok: true }); // honeypot
   if (!firstName || !lastName || !email || !phone || !zip || !projectType || !homeowner) {
@@ -95,10 +102,22 @@ export default async function handler(req, res) {
   const fingerprintSource = [email, zip, projectLabel, budget, start, details].map(normalize).join('|');
   const fingerprintHash = createHash('sha256').update(fingerprintSource).digest('hex');
   const fingerprintLine = `Scorva Fingerprint: ${fingerprintHash}`;
+  const attribution = [
+    utmSource && `UTM Source: ${utmSource}`,
+    utmMedium && `UTM Medium: ${utmMedium}`,
+    utmCampaign && `UTM Campaign: ${utmCampaign}`,
+    utmContent && `UTM Content: ${utmContent}`,
+    utmTerm && `UTM Term: ${utmTerm}`,
+    sourcePage && `Landing Page: ${sourcePage}`,
+    referrer && `Referrer: ${referrer}`
+  ].filter(Boolean);
+  const sourceSummary = utmSource
+    ? [utmSource, utmMedium, utmCampaign].filter(Boolean).join(' / ')
+    : (referrer || 'Direct / unknown');
 
   async function sendLeadEmail({ dealId }) {
     if (!resendApiKey || !notificationEmail) return { skipped: true };
-    const html = `<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#111"><h2>New Scorva Project Request</h2><p style="color:#666">A homeowner project request was submitted on ScorvaProjects.com.</p><table style="border-collapse:collapse;width:100%"><tr><td><b>Name</b></td><td>${safe(firstName)} ${safe(lastName)}</td></tr><tr><td><b>Phone</b></td><td><a href="tel:${safe(phone)}">${safe(phone)}</a></td></tr><tr><td><b>Email</b></td><td><a href="mailto:${safe(email)}">${safe(email)}</a></td></tr><tr><td><b>ZIP</b></td><td>${safe(zip)}</td></tr><tr><td><b>Homeowner</b></td><td>${safe(homeowner)}</td></tr><tr><td><b>Project</b></td><td>${safe(projectLabel)}</td></tr><tr><td><b>Budget</b></td><td>${safe(budget || 'Not provided')}</td></tr><tr><td><b>Preferred start</b></td><td>${safe(start || 'Not provided')}</td></tr><tr><td><b>Details</b></td><td>${safe(details || 'Not provided')}</td></tr></table><p style="margin-top:24px"><a href="https://app.hubspot.com/contacts/247060573/record/0-3/${encodeURIComponent(dealId)}" style="background:#111;color:white;padding:12px 16px;border-radius:6px;text-decoration:none">Open Deal in HubSpot</a></p></div>`;
+    const html = `<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#111"><h2>New Scorva Project Request</h2><p style="color:#666">A homeowner project request was submitted on ScorvaProjects.com.</p><table style="border-collapse:collapse;width:100%"><tr><td><b>Name</b></td><td>${safe(firstName)} ${safe(lastName)}</td></tr><tr><td><b>Phone</b></td><td><a href="tel:${safe(phone)}">${safe(phone)}</a></td></tr><tr><td><b>Email</b></td><td><a href="mailto:${safe(email)}">${safe(email)}</a></td></tr><tr><td><b>ZIP</b></td><td>${safe(zip)}</td></tr><tr><td><b>Homeowner</b></td><td>${safe(homeowner)}</td></tr><tr><td><b>Project</b></td><td>${safe(projectLabel)}</td></tr><tr><td><b>Budget</b></td><td>${safe(budget || 'Not provided')}</td></tr><tr><td><b>Preferred start</b></td><td>${safe(start || 'Not provided')}</td></tr><tr><td><b>Details</b></td><td>${safe(details || 'Not provided')}</td></tr><tr><td><b>Lead source</b></td><td>${safe(sourceSummary)}</td></tr></table><p style="margin-top:24px"><a href="https://app.hubspot.com/contacts/247060573/record/0-3/${encodeURIComponent(dealId)}" style="background:#111;color:white;padding:12px 16px;border-radius:6px;text-decoration:none">Open Deal in HubSpot</a></p></div>`;
     const r = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${resendApiKey}`, 'Content-Type': 'application/json' },
@@ -181,6 +200,7 @@ export default async function handler(req, res) {
 
     const description = [
       'Source: ScorvaProjects.com',
+      ...attribution,
       `Project ZIP: ${zip}`,
       `Homeowner Status: ${homeowner}`,
       `Project Type: ${projectLabel}`,
