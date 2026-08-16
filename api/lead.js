@@ -8,6 +8,7 @@ globalThis.__scorvaLeadBuckets = requestBuckets;
 const RATE_WINDOW_MS = 15 * 60 * 1000;
 const RATE_MAX_REQUESTS = 8;
 const MAX_BODY_BYTES = 20_000;
+const DEAL_FINGERPRINT_PROPERTY = 'scorva_submission_fingerprint';
 
 function clientIp(req) {
   const forwarded = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
@@ -27,7 +28,6 @@ function isRateLimited(req) {
   current.count += 1;
   requestBuckets.set(key, current);
 
-  // Opportunistic cleanup to keep warm-instance memory bounded.
   if (requestBuckets.size > 500) {
     for (const [bucketKey, bucket] of requestBuckets) {
       if (now - bucket.startedAt >= RATE_WINDOW_MS) requestBuckets.delete(bucketKey);
@@ -39,23 +39,26 @@ function isRateLimited(req) {
 
 function isSameOrigin(req) {
   const origin = String(req.headers?.origin || '').trim();
-  if (!origin) return true; // Some privacy tools omit Origin on same-site requests.
+  if (!origin) return true;
 
   try {
     const originHost = new URL(origin).host.toLowerCase();
-    const requestHost = String(req.headers?.['x-forwarded-host'] || req.headers?.host || '').split(',')[0].trim().toLowerCase();
+    const requestHost = String(req.headers?.['x-forwarded-host'] || req.headers?.host || '')
+      .split(',')[0]
+      .trim()
+      .toLowerCase();
     return Boolean(requestHost) && originHost === requestHost;
   } catch {
     return false;
   }
 }
 
-// Scorva website lead endpoint. Runs server-side on Vercel.
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ ok: false, error: 'Method not allowed' });
   }
+
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
 
@@ -82,15 +85,22 @@ export default async function handler(req, res) {
   const resendApiKey = process.env.RESEND_API_KEY;
   const notificationEmail = process.env.LEAD_NOTIFICATION_EMAIL;
   const fromEmail = process.env.LEAD_FROM_EMAIL || 'Scorva Projects <leads@scorvaprojects.com>';
-  if (!hubspotToken) return res.status(500).json({ ok: false, error: 'Lead service is temporarily unavailable.' });
+
+  if (!hubspotToken) {
+    return res.status(500).json({ ok: false, error: 'Lead service is temporarily unavailable.' });
+  }
 
   const body = req.body || {};
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     return res.status(400).json({ ok: false, error: 'Invalid request body.' });
   }
 
-  const clean = (v, max = 500) => String(v ?? '').replace(/[\u0000-\u001F\u007F]/g, ' ').trim().slice(0, max);
-  const normalize = (v = '') => clean(v, 2000).toLowerCase().replace(/\s+/g, ' ');
+  const clean = (value, max = 500) => String(value ?? '')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ')
+    .trim()
+    .slice(0, max);
+  const normalize = (value = '') => clean(value, 2000).toLowerCase().replace(/\s+/g, ' ');
+
   const firstName = clean(body.firstName, 60);
   const lastName = clean(body.lastName, 60);
   const email = clean(body.email, 120).toLowerCase();
@@ -111,13 +121,15 @@ export default async function handler(req, res) {
   const utmContent = clean(body.utmContent, 160);
   const utmTerm = clean(body.utmTerm, 160);
 
-  if (website) return res.status(200).json({ ok: true }); // honeypot
+  if (website) return res.status(200).json({ ok: true });
+
   if (!firstName || !lastName || !email || !phone || !zip || !projectType || !homeowner) {
     return res.status(400).json({ ok: false, error: 'Please complete the required fields.' });
   }
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({ ok: false, error: 'Please enter a valid email address.' });
   }
+
   const phoneDigits = phone.replace(/\D/g, '');
   if (phoneDigits.length < 10 || phoneDigits.length > 15) {
     return res.status(400).json({ ok: false, error: 'Please enter a valid phone number.' });
@@ -148,25 +160,37 @@ export default async function handler(req, res) {
     return res.status(400).json({ ok: false, error: 'Please select a valid preferred start.' });
   }
 
-  const hubspotHeaders = { Authorization: `Bearer ${hubspotToken}`, 'Content-Type': 'application/json' };
+  const hubspotHeaders = {
+    Authorization: `Bearer ${hubspotToken}`,
+    'Content-Type': 'application/json'
+  };
+
   async function hs(path, options = {}) {
-    const r = await fetch(`https://api.hubapi.com${path}`, {
+    const response = await fetch(`https://api.hubapi.com${path}`, {
       ...options,
       headers: { ...hubspotHeaders, ...(options.headers || {}) },
       signal: AbortSignal.timeout(12_000)
     });
-    const text = await r.text();
+
+    const text = await response.text();
     let data = {};
-    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
-    if (!r.ok) {
-      const e = new Error(data?.message || `HubSpot request failed (${r.status})`);
-      e.data = data;
-      throw e;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { raw: text };
     }
+
+    if (!response.ok) {
+      const error = new Error(data?.message || `HubSpot request failed (${response.status})`);
+      error.status = response.status;
+      error.data = data;
+      throw error;
+    }
+
     return data;
   }
 
-  const safe = (v = '') => String(v)
+  const safe = (value = '') => String(value)
     .replaceAll('&', '&amp;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
@@ -177,6 +201,7 @@ export default async function handler(req, res) {
   const fingerprintSource = [email, zip, projectLabel, budget, start, details].map(normalize).join('|');
   const fingerprintHash = createHash('sha256').update(fingerprintSource).digest('hex');
   const fingerprintLine = `Scorva Fingerprint: ${fingerprintHash}`;
+
   const attribution = [
     utmSource && `UTM Source: ${utmSource}`,
     utmMedium && `UTM Medium: ${utmMedium}`,
@@ -186,16 +211,22 @@ export default async function handler(req, res) {
     sourcePage && `Landing Page: ${sourcePage}`,
     referrer && `Referrer: ${referrer}`
   ].filter(Boolean);
+
   const sourceSummary = utmSource
     ? [utmSource, utmMedium, utmCampaign].filter(Boolean).join(' / ')
     : (referrer || 'Direct / unknown');
 
   async function sendLeadEmail({ dealId }) {
     if (!resendApiKey || !notificationEmail) return { skipped: true };
+
     const html = `<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#111"><h2>New Scorva Project Request</h2><p style="color:#666">A homeowner project request was submitted on ScorvaProjects.com.</p><table style="border-collapse:collapse;width:100%"><tr><td><b>Name</b></td><td>${safe(firstName)} ${safe(lastName)}</td></tr><tr><td><b>Phone</b></td><td><a href="tel:${safe(phone)}">${safe(phone)}</a></td></tr><tr><td><b>Email</b></td><td><a href="mailto:${safe(email)}">${safe(email)}</a></td></tr><tr><td><b>ZIP</b></td><td>${safe(zip)}</td></tr><tr><td><b>Homeowner</b></td><td>${safe(homeowner)}</td></tr><tr><td><b>Project</b></td><td>${safe(projectLabel)}</td></tr><tr><td><b>Budget</b></td><td>${safe(budget || 'Not provided')}</td></tr><tr><td><b>Preferred start</b></td><td>${safe(start || 'Not provided')}</td></tr><tr><td><b>Details</b></td><td>${safe(details || 'Not provided')}</td></tr><tr><td><b>Lead source</b></td><td>${safe(sourceSummary)}</td></tr></table><p style="margin-top:24px"><a href="https://app.hubspot.com/contacts/247060573/record/0-3/${encodeURIComponent(dealId)}" style="background:#111;color:white;padding:12px 16px;border-radius:6px;text-decoration:none">Open Deal in HubSpot</a></p></div>`;
-    const r = await fetch('https://api.resend.com/emails', {
+
+    const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      headers: { Authorization: `Bearer ${resendApiKey}`, 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${resendApiKey}`,
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({
         from: fromEmail,
         to: [notificationEmail],
@@ -205,74 +236,133 @@ export default async function handler(req, res) {
       }),
       signal: AbortSignal.timeout(10_000)
     });
-    const text = await r.text();
+
+    const text = await response.text();
     let data = {};
-    try { data = text ? JSON.parse(text) : {}; } catch { data = { raw: text }; }
-    if (!r.ok) {
-      const e = new Error(data?.message || `Resend failed (${r.status})`);
-      e.data = data;
-      throw e;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch {
+      data = { raw: text };
     }
+
+    if (!response.ok) {
+      const error = new Error(data?.message || `Resend failed (${response.status})`);
+      error.status = response.status;
+      error.data = data;
+      throw error;
+    }
+
     return data;
   }
 
-  async function findRecentDuplicate(contactId) {
-    const contact = await hs(`/crm/v3/objects/contacts/${contactId}?associations=deals`);
-    const dealIds = [...new Set((contact?.associations?.deals?.results || []).map(x => x.id).filter(Boolean))];
-    const cutoff = Date.now() - (24 * 60 * 60 * 1000);
-
-    for (const dealId of dealIds) {
-      try {
-        const deal = await hs(`/crm/v3/objects/deals/${dealId}?properties=description,createdate,dealname`);
-        const created = Date.parse(deal?.properties?.createdate || '');
-        if (!created || created < cutoff) continue;
-        const description = String(deal?.properties?.description || '');
-        if (description.includes(fingerprintLine)) return deal;
-
-        // Compatibility for deals created before hashed fingerprinting existed.
-        const legacyMatch =
-          description.includes(`Project ZIP: ${zip}`) &&
-          description.includes(`Project Type: ${projectLabel}`) &&
-          description.includes(`Budget: ${budget || 'Not provided'}`) &&
-          description.includes(`Preferred Start: ${start || 'Not provided'}`) &&
-          description.includes(`Project Details: ${details || 'Not provided'}`);
-        if (legacyMatch) return deal;
-      } catch (e) {
-        console.warn('Scorva duplicate check skipped for deal', { dealId, message: e?.message });
+  async function ensureFingerprintProperty() {
+    try {
+      const property = await hs(`/crm/v3/properties/deals/${DEAL_FINGERPRINT_PROPERTY}`);
+      if (!property?.hasUniqueValue) {
+        const error = new Error(`${DEAL_FINGERPRINT_PROPERTY} exists but is not unique`);
+        error.code = 'FINGERPRINT_PROPERTY_NOT_UNIQUE';
+        throw error;
       }
+      return property;
+    } catch (error) {
+      if (error?.status !== 404) throw error;
     }
-    return null;
+
+    try {
+      return await hs('/crm/v3/properties/deals', {
+        method: 'POST',
+        body: JSON.stringify({
+          groupName: 'dealinformation',
+          name: DEAL_FINGERPRINT_PROPERTY,
+          label: 'Scorva Submission Fingerprint',
+          description: 'Server-generated unique key used to prevent duplicate Scorva lead deals.',
+          type: 'string',
+          fieldType: 'text',
+          hasUniqueValue: true,
+          hidden: false,
+          formField: false
+        })
+      });
+    } catch (error) {
+      // Two cold instances can try to provision the property simultaneously. If one wins,
+      // re-read and proceed. Any other failure is configuration-critical and must fail closed.
+      if (error?.status === 409) {
+        const property = await hs(`/crm/v3/properties/deals/${DEAL_FINGERPRINT_PROPERTY}`);
+        if (property?.hasUniqueValue) return property;
+      }
+      throw error;
+    }
   }
 
-  try {
-    let contactId;
-    const search = await hs('/crm/v3/objects/contacts/search', {
-      method: 'POST',
-      body: JSON.stringify({
-        filterGroups: [{ filters: [{ propertyName: 'email', operator: 'EQ', value: email }] }],
-        properties: ['email'],
-        limit: 1
-      })
-    });
+  async function getDealByFingerprint() {
+    try {
+      return await hs(`/crm/v3/objects/deals/${encodeURIComponent(fingerprintHash)}?idProperty=${DEAL_FINGERPRINT_PROPERTY}&properties=dealname,description,createdate`);
+    } catch (error) {
+      if (error?.status === 404) return null;
+      throw error;
+    }
+  }
 
+  async function getContactByEmail() {
+    try {
+      return await hs(`/crm/v3/objects/contacts/${encodeURIComponent(email)}?idProperty=email&properties=email`);
+    } catch (error) {
+      if (error?.status === 404) return null;
+      throw error;
+    }
+  }
+
+  async function upsertContact() {
     const contactProps = { firstname: firstName, lastname: lastName, phone, zip };
-    if (search.total > 0) {
-      contactId = search.results[0].id;
-      await hs(`/crm/v3/objects/contacts/${contactId}`, {
+    let contact = await getContactByEmail();
+
+    if (contact) {
+      await hs(`/crm/v3/objects/contacts/${contact.id}`, {
         method: 'PATCH',
         body: JSON.stringify({ properties: contactProps })
       });
-      const duplicate = await findRecentDuplicate(contactId);
-      if (duplicate) {
-        return res.status(200).json({ ok: true, dealId: duplicate.id, duplicate: true, notificationSent: false });
-      }
-    } else {
-      const contact = await hs('/crm/v3/objects/contacts', {
+      return contact.id;
+    }
+
+    try {
+      contact = await hs('/crm/v3/objects/contacts', {
         method: 'POST',
         body: JSON.stringify({ properties: { ...contactProps, email } })
       });
-      contactId = contact.id;
+      return contact.id;
+    } catch (error) {
+      // Contact email is unique in HubSpot. Concurrent first submissions for the same new
+      // email can race here; recover by reading the contact that the other request created.
+      if (error?.status === 409) {
+        contact = await getContactByEmail();
+        if (contact?.id) {
+          await hs(`/crm/v3/objects/contacts/${contact.id}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ properties: contactProps })
+          });
+          return contact.id;
+        }
+      }
+      throw error;
     }
+  }
+
+  try {
+    await ensureFingerprintProperty();
+
+    // Fast path for retries after a completed request. The unique property lookup is direct
+    // and does not depend on contact/deal association propagation or CRM search indexing.
+    const existingDeal = await getDealByFingerprint();
+    if (existingDeal) {
+      return res.status(200).json({
+        ok: true,
+        dealId: existingDeal.id,
+        duplicate: true,
+        notificationSent: false
+      });
+    }
+
+    const contactId = await upsertContact();
 
     const description = [
       'Source: ScorvaProjects.com',
@@ -286,34 +376,79 @@ export default async function handler(req, res) {
       fingerprintLine
     ].join('\n');
 
-    const deal = await hs('/crm/v3/objects/deals', {
-      method: 'POST',
-      body: JSON.stringify({
-        properties: {
-          dealname: `${firstName} ${lastName} - ${projectLabel}`,
-          pipeline: 'default',
-          dealstage: 'appointmentscheduled',
-          description,
-          hubspot_owner_id: '97266463'
-        },
-        associations: [{
-          to: { id: contactId },
-          types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 3 }]
-        }]
-      })
-    });
+    let deal;
+    try {
+      deal = await hs('/crm/v3/objects/deals', {
+        method: 'POST',
+        body: JSON.stringify({
+          properties: {
+            dealname: `${firstName} ${lastName} - ${projectLabel}`,
+            pipeline: 'default',
+            dealstage: 'appointmentscheduled',
+            description,
+            hubspot_owner_id: '97266463',
+            [DEAL_FINGERPRINT_PROPERTY]: fingerprintHash
+          },
+          associations: [{
+            to: { id: contactId },
+            types: [{ associationCategory: 'HUBSPOT_DEFINED', associationTypeId: 3 }]
+          }]
+        })
+      });
+    } catch (error) {
+      if (error?.status === 409) {
+        const duplicate = await getDealByFingerprint();
+        if (duplicate) {
+          return res.status(200).json({
+            ok: true,
+            dealId: duplicate.id,
+            duplicate: true,
+            notificationSent: false
+          });
+        }
+      }
+      throw error;
+    }
 
     let notificationSent = false;
     try {
       const result = await sendLeadEmail({ dealId: deal.id });
       notificationSent = !result?.skipped;
-    } catch (e) {
-      console.error('Scorva notification failed', { message: e?.message });
+    } catch (error) {
+      console.error('Scorva notification failed', {
+        dealId: deal.id,
+        status: error?.status,
+        message: error?.message
+      });
     }
 
-    return res.status(200).json({ ok: true, dealId: deal.id, duplicate: false, notificationSent });
+    return res.status(200).json({
+      ok: true,
+      dealId: deal.id,
+      duplicate: false,
+      notificationSent
+    });
   } catch (error) {
-    console.error('Scorva lead submission failed', { message: error?.message });
-    return res.status(500).json({ ok: false, error: 'We could not submit your request. Please try again.' });
+    const configurationFailure = error?.code === 'FINGERPRINT_PROPERTY_NOT_UNIQUE'
+      || (error?.status === 403 && String(error?.data?.message || '').toLowerCase().includes('scope'));
+
+    console.error('Scorva lead submission failed', {
+      status: error?.status,
+      code: error?.code,
+      correlationId: error?.data?.correlationId,
+      message: error?.message
+    });
+
+    if (configurationFailure) {
+      return res.status(503).json({
+        ok: false,
+        error: 'Lead service configuration needs attention. Please try again shortly.'
+      });
+    }
+
+    return res.status(500).json({
+      ok: false,
+      error: 'We could not submit your request. Please try again.'
+    });
   }
 }
