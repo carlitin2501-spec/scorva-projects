@@ -10,6 +10,7 @@ const RATE_MAX_REQUESTS = 8;
 const MAX_BODY_BYTES = 20_000;
 const DEDUPE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const DEAL_FINGERPRINT_PROPERTY = 'scorva_submission_fingerprint';
+const INITIAL_DEAL_STAGE = process.env.HUBSPOT_INITIAL_DEAL_STAGE || 'appointmentscheduled';
 
 function clientIp(req) {
   const forwarded = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
@@ -86,6 +87,8 @@ export default async function handler(req, res) {
   const resendApiKey = process.env.RESEND_API_KEY;
   const notificationEmail = process.env.LEAD_NOTIFICATION_EMAIL;
   const fromEmail = process.env.LEAD_FROM_EMAIL || 'Scorva Projects <leads@scorvaprojects.com>';
+  const isTestSubmission = process.env.VERCEL_ENV === 'preview';
+  const testPrefix = isTestSubmission ? '[TEST] ' : '';
 
   if (!hubspotToken) {
     return res.status(500).json({ ok: false, error: 'Lead service is temporarily unavailable.' });
@@ -199,7 +202,10 @@ export default async function handler(req, res) {
     .replaceAll("'", '&#039;');
 
   const projectLabel = projectType === 'Painting' ? `Painting - ${paintingType}` : projectType;
-  const fingerprintSource = [email, zip, projectLabel, budget, start, details].map(normalize).join('|');
+  // Dedupe identity intentionally excludes mutable qualification data (budget, timing,
+  // and free-text details). Same client + ZIP + project should be one lead within 24h,
+  // while a different project type remains a valid separate opportunity.
+  const fingerprintSource = [email, zip, projectLabel].map(normalize).join('|');
   const fingerprintHash = createHash('sha256').update(fingerprintSource).digest('hex');
   const fingerprintLine = `Scorva Fingerprint: ${fingerprintHash}`;
 
@@ -220,7 +226,7 @@ export default async function handler(req, res) {
   async function sendLeadEmail({ dealId }) {
     if (!resendApiKey || !notificationEmail) return { skipped: true };
 
-    const html = `<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#111"><h2>New Scorva Project Request</h2><p style="color:#666">A homeowner project request was submitted on ScorvaProjects.com.</p><table style="border-collapse:collapse;width:100%"><tr><td><b>Name</b></td><td>${safe(firstName)} ${safe(lastName)}</td></tr><tr><td><b>Phone</b></td><td><a href="tel:${safe(phone)}">${safe(phone)}</a></td></tr><tr><td><b>Email</b></td><td><a href="mailto:${safe(email)}">${safe(email)}</a></td></tr><tr><td><b>ZIP</b></td><td>${safe(zip)}</td></tr><tr><td><b>Homeowner</b></td><td>${safe(homeowner)}</td></tr><tr><td><b>Project</b></td><td>${safe(projectLabel)}</td></tr><tr><td><b>Budget</b></td><td>${safe(budget || 'Not provided')}</td></tr><tr><td><b>Preferred start</b></td><td>${safe(start || 'Not provided')}</td></tr><tr><td><b>Details</b></td><td>${safe(details || 'Not provided')}</td></tr><tr><td><b>Lead source</b></td><td>${safe(sourceSummary)}</td></tr></table><p style="margin-top:24px"><a href="https://app.hubspot.com/contacts/247060573/record/0-3/${encodeURIComponent(dealId)}" style="background:#111;color:white;padding:12px 16px;border-radius:6px;text-decoration:none">Open Deal in HubSpot</a></p></div>`;
+    const html = `<div style="font-family:Arial,sans-serif;max-width:640px;margin:auto;color:#111"><h2>${safe(testPrefix)}New Scorva Project Request</h2><p style="color:#666">A homeowner project request was submitted on ScorvaProjects.com.</p><table style="border-collapse:collapse;width:100%"><tr><td><b>Name</b></td><td>${safe(firstName)} ${safe(lastName)}</td></tr><tr><td><b>Phone</b></td><td><a href="tel:${safe(phone)}">${safe(phone)}</a></td></tr><tr><td><b>Email</b></td><td><a href="mailto:${safe(email)}">${safe(email)}</a></td></tr><tr><td><b>ZIP</b></td><td>${safe(zip)}</td></tr><tr><td><b>Homeowner</b></td><td>${safe(homeowner)}</td></tr><tr><td><b>Project</b></td><td>${safe(projectLabel)}</td></tr><tr><td><b>Budget</b></td><td>${safe(budget || 'Not provided')}</td></tr><tr><td><b>Preferred start</b></td><td>${safe(start || 'Not provided')}</td></tr><tr><td><b>Details</b></td><td>${safe(details || 'Not provided')}</td></tr><tr><td><b>Lead source</b></td><td>${safe(sourceSummary)}</td></tr></table><p style="margin-top:24px"><a href="https://app.hubspot.com/contacts/247060573/record/0-3/${encodeURIComponent(dealId)}" style="background:#111;color:white;padding:12px 16px;border-radius:6px;text-decoration:none">Open Deal in HubSpot</a></p></div>`;
 
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -231,7 +237,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         from: fromEmail,
         to: [notificationEmail],
-        subject: `New Scorva Lead: ${firstName} ${lastName} - ${projectLabel}`,
+        subject: `${testPrefix}New Scorva Lead: ${firstName} ${lastName} - ${projectLabel}`,
         html,
         reply_to: email
       }),
@@ -381,6 +387,7 @@ export default async function handler(req, res) {
 
     const description = [
       'Source: ScorvaProjects.com',
+      isTestSubmission && 'Submission Environment: Preview / Test',
       ...attribution,
       `Project ZIP: ${zip}`,
       `Homeowner Status: ${homeowner}`,
@@ -389,7 +396,7 @@ export default async function handler(req, res) {
       `Preferred Start: ${start || 'Not provided'}`,
       `Project Details: ${details || 'Not provided'}`,
       fingerprintLine
-    ].join('\n');
+    ].filter(Boolean).join('\n');
 
     let deal;
     try {
@@ -397,9 +404,9 @@ export default async function handler(req, res) {
         method: 'POST',
         body: JSON.stringify({
           properties: {
-            dealname: `${firstName} ${lastName} - ${projectLabel}`,
+            dealname: `${testPrefix}${firstName} ${lastName} - ${projectLabel}`,
             pipeline: 'default',
-            dealstage: 'appointmentscheduled',
+            dealstage: INITIAL_DEAL_STAGE,
             description,
             hubspot_owner_id: '97266463',
             [DEAL_FINGERPRINT_PROPERTY]: fingerprintHash
